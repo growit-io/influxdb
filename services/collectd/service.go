@@ -11,6 +11,7 @@ import (
 	"github.com/influxdb/influxdb/cluster"
 	"github.com/influxdb/influxdb/meta"
 	"github.com/influxdb/influxdb/tsdb"
+	"github.com/influxdb/influxdb/influxql"
 	"github.com/kimor79/gollectd"
 )
 
@@ -246,6 +247,7 @@ func Unmarshal(packet *gollectd.Packet) []tsdb.Point {
 		name := fmt.Sprintf("%s_%s", packet.Plugin, packet.Values[i].Name)
 		tags := make(map[string]string)
 		fields := make(map[string]interface{})
+		fieldname := "value"
 
 		if packet.Hostname != "" {
 			tags["host"] = packet.Hostname
@@ -256,11 +258,20 @@ func Unmarshal(packet *gollectd.Packet) []tsdb.Point {
 		if packet.Type != "" {
 			tags["type"] = packet.Type
 		}
+
+		// Map the "type instance" in collectd, if present, to fields.
 		if packet.TypeInstance != "" {
-			fields[packet.TypeInstance] = packet.Values[i].Value
-		} else {
-			fields["value"] = packet.Values[i].Value
+			var tok influxql.Token
+
+			// "Escape" keywords which cannot be used as field names.
+			if tok = influxql.Lookup(packet.TypeInstance); tok != influxql.IDENT {
+				fieldname = packet.TypeInstance + "_"
+			} else {
+				fieldname = packet.TypeInstance
+			}
 		}
+
+		fields[fieldname] = packet.Values[i].Value
 		p := tsdb.NewPoint(name, tags, fields, timestamp)
 
 		points = append(points, p)
