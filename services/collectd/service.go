@@ -247,8 +247,6 @@ func Unmarshal(packet *gollectd.Packet) []tsdb.Point {
 		tags := make(map[string]string)
 		fields := make(map[string]interface{})
 
-		fields["value"] = packet.Values[i].Value
-
 		if packet.Hostname != "" {
 			tags["host"] = packet.Hostname
 		}
@@ -259,7 +257,9 @@ func Unmarshal(packet *gollectd.Packet) []tsdb.Point {
 			tags["type"] = packet.Type
 		}
 		if packet.TypeInstance != "" {
-			tags["type_instance"] = packet.TypeInstance
+			fields[packet.TypeInstance] = packet.Values[i].Value
+		} else {
+			fields["value"] = packet.Values[i].Value
 		}
 		p := tsdb.NewPoint(name, tags, fields, timestamp)
 
