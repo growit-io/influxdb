@@ -69,7 +69,7 @@ BINS=(
 
 # usage prints simple usage information.
 usage() {
-    echo -e "$0 [<version>] [-h]\n"
+    echo -e "$0 <version> [-h]\n"
     cleanup_exit $1
 }
 
