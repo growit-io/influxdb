@@ -28,6 +28,16 @@ type metaStore interface {
 	CreateDatabaseIfNotExists(name string) (*meta.DatabaseInfo, error)
 }
 
+// BufferedPoint wraps an unfinished point and adds an expiration time for it.
+// Further fields may be added to the point as more UDP packets are parsed
+// within the window of expiration.  The expiration time should be relatively
+// small. yet large enough to collect all the field values for one series and
+// timestamp.
+type BufferedPoint struct {
+        point  *tsdb.Point
+        expiry time.Time
+}
+
 // Service represents a UDP server which receives metrics in collectd's binary
 // protocol and stores them in InfluxDB.
 type Service struct {
@@ -40,6 +50,7 @@ type Service struct {
 	err     chan error
 	stop    chan struct{}
 	ln      *net.UDPConn
+        buffer  map[uint64]*BufferedPoint
 	batcher *tsdb.PointBatcher
 	typesdb gollectd.Types
 	addr    net.Addr
@@ -51,6 +62,7 @@ func NewService(c Config) *Service {
 		Config: &c,
 		Logger: log.New(os.Stderr, "[collectd] ", log.LstdFlags),
 		err:    make(chan error),
+                buffer: make(map[uint64]*BufferedPoint),
 	}
 
 	return s
@@ -196,12 +208,49 @@ func (s *Service) handleMessage(buffer []byte) {
 		s.Logger.Printf("Collectd parse error: %s", err)
 		return
 	}
+
 	for _, packet := range *packets {
-		points := Unmarshal(&packet)
+		points := s.coalescePoints(Unmarshal(&packet))
 		for _, p := range points {
 			s.batcher.In() <- p
 		}
 	}
+}
+
+
+// Merge the fields of all points received with the same series and timestamp,
+// within a relatively small time window.  Return points whose coalescing time
+// window has expired.
+func (s *Service) coalescePoints(points []tsdb.Point) []tsdb.Point {
+        now := time.Now()
+        expiry := now.Add(1 * time.Second)
+
+	for i := range points {
+		key := points[i].HashID() + uint64(points[i].UnixNano())
+
+		if bp := s.buffer[key]; bp != nil {
+			for k, v := range points[i].Fields() {
+				(*bp.point).AddField(k, v)
+			}
+		} else {
+			var bp BufferedPoint
+			bp.point = &points[i]
+			bp.expiry = expiry
+			s.buffer[key] = &bp
+		}
+	}
+
+	var expiredPoints []tsdb.Point
+	for _, bp := range s.buffer {
+		if now.After(bp.expiry) {
+			expiredPoints = append(expiredPoints, *bp.point)
+		}
+	}
+	for _, p := range expiredPoints {
+		key := p.HashID() + uint64(p.UnixNano())
+		delete(s.buffer, key)
+	}
+	return expiredPoints
 }
 
 func (s *Service) writePoints() {
